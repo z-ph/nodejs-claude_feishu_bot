@@ -1,0 +1,17 @@
+{
+  "name": "echo_bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "chenli.idevlab@bytedance.com",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "node index_claude.js",
+    "test:env": "node test_config.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.55.0",
+    "@anthropic-ai/sdk": "^0.67.0",
+    "dotenv": "^17.2.3"
+  }
+}
