@@ -19,7 +19,7 @@ import { isDuplicateEvent } from './utils/eventDeduplicator.js';
 import { eventQueue } from './utils/eventQueue.js';
 import { detectEventTriggerType } from './utils/eventDetector.js';
 import { isClaudeServiceAvailable } from './services/claudeService.js';
-import { sendResponse } from './services/messageService.js';
+import { sendResponse, replyToFeishu, editMessage } from './services/messageService.js';
 import { wsClient } from './config/larkConfig.js';
 
 // 环境变量检查
@@ -99,13 +99,23 @@ async function handleFeishuEvent(data) {
 
     console.log(`📨 事件已记录，将异步处理: ${userMessage}`);
 
-    // 第四步：将事件加入异步处理队列
+    // 第四步：立即发送"正在思考中"回复
+    let thinkingMessageResult = null;
+    try {
+      thinkingMessageResult = await replyToFeishu(data);
+      console.log('✅ 立即回复发送成功');
+    } catch (error) {
+      console.error('❌ 立即回复发送失败:', error);
+    }
+
+    // 第五步：将事件加入异步处理队列
     // 关键：此时事件处理已经完成，HTTP 200响应会立即返回
     eventQueue.add({
       data,
       eventType,
       userMessage,
-      thread_id
+      thread_id,
+      thinkingMessageId: thinkingMessageResult?.data?.message_id || null
     });
 
     console.log('✅ 事件已加入异步队列，HTTP 200响应即将返回');

@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "node index_claude.js",
+    "dev": "node index_modular.js",
     "test:env": "node test_config.js"
   },
   "dependencies": {

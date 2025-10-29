@@ -92,6 +92,68 @@ async function sendResponse(data, content, msgType = 'text') {
 }
 
 /**
+ * 立即回复飞书，告知用户正在处理
+ * @param {object} data - 事件数据
+ * @returns {Promise<object|null>} 发送结果，包含消息ID等信息
+ */
+async function replyToFeishu(data) {
+  try {
+    console.log('📤 立即回复飞书，告知用户正在处理');
+
+    const thinkingMessage = JSON.stringify({ text: '正在思考中，请稍候...' });
+    const result = await sendResponse(data, thinkingMessage, 'text');
+
+    console.log('✅ 立即回复发送成功');
+    return result;
+  } catch (error) {
+    console.error('❌ 立即回复发送失败:', error);
+    return null;
+  }
+}
+
+/**
+ * 编辑已发送的消息
+ * @param {string} messageId - 要编辑的消息ID
+ * @param {string} newContent - 新的消息内容
+ * @param {string} tenantToken - 租户令牌（可选）
+ * @returns {Promise<object>} 编辑结果
+ */
+async function editMessage(messageId, newContent, tenantToken = null) {
+  try {
+    console.log('📝 编辑消息内容');
+    console.log('消息ID:', messageId);
+    console.log('新内容:', newContent);
+
+    let updateOptions = {
+      path: {
+        message_id: messageId,
+      },
+      data: {
+        msg_type: 'text',
+        content: JSON.stringify({ text: newContent }),
+      },
+    };
+
+    // 如果提供了tenantToken，使用它；否则让SDK自动处理
+    if (tenantToken) {
+      updateOptions = {
+        ...updateOptions,
+        ...client.withTenantToken(tenantToken)
+      };
+    }
+
+    const result = await client.im.v1.message.update(updateOptions);
+
+    console.log('✅ 消息编辑成功');
+    return result;
+  } catch (error) {
+    console.error('❌ 消息编辑失败:', error);
+    console.error('编辑错误详情:', error.message);
+    throw error;
+  }
+}
+
+/**
  * 发送成功响应给飞书，无论内容如何都要确保响应成功
  * @param {object} data - 事件数据
  * @param {string} content - 响应内容
@@ -125,5 +187,7 @@ async function sendAckToFeishu(data, content, type, msgType = 'text') {
 
 export {
   sendResponse,
-  sendAckToFeishu
+  sendAckToFeishu,
+  replyToFeishu,
+  editMessage
 };
