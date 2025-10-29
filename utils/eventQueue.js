@@ -5,7 +5,7 @@
 
 import { getClaudeResponse } from '../services/claudeService.js';
 import { getContextAsync } from '../services/contextService.js';
-import { sendResponse, editMessage } from '../services/messageService.js';
+import { sendResponse, editMessage, replyToFeishu } from '../services/messageService.js';
 import { client } from '../config/larkConfig.js';
 
 /**
@@ -70,9 +70,29 @@ class EventQueue {
    * @param {object} eventData - 事件数据
    */
   async processEvent(eventData) {
-    const { data, eventType, userMessage, thread_id, thinkingMessageId } = eventData;
+    const { data, eventType, userMessage, thread_id, needsImmediateReply } = eventData;
     console.log(`🔄 异步处理事件: ${eventType}`);
-    console.log('思考中消息ID:', thinkingMessageId);
+
+    let thinkingMessageId = null;
+
+    // 第一步：发送立即回复（如果需要）
+    if (needsImmediateReply) {
+      try {
+        console.log('📤 发送立即回复...');
+        // 为立即回复设置3秒超时，避免阻塞过久
+        const thinkingResult = await Promise.race([
+          replyToFeishu(data),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('立即回复超时')), 3000)
+          )
+        ]);
+        thinkingMessageId = thinkingResult?.data?.message_id || null;
+        console.log('✅ 立即回复发送成功，消息ID:', thinkingMessageId);
+      } catch (error) {
+        console.warn('⚠️ 立即回复发送失败，将继续处理:', error.message);
+        // 即使立即回复失败，也继续处理Claude回复
+      }
+    }
 
     try {
       // 如果有thread_id，异步获取上下文
