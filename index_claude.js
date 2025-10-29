@@ -21,11 +21,227 @@ if (!ANTHROPIC_BASE_URL || !ANTHROPIC_AUTH_TOKEN) {
   throw new Error('请在 .env 文件中配置 ANTHROPIC_BASE_URL 和 ANTHROPIC_AUTH_TOKEN');
 }
 
-// 事件处理器缓存和去重
-const eventCache = new Map();
+// 事件处理器缓存和去重 - 支持多种去重标识
 const messageCache = new Set();
+const eventCache = new Set();
 
-// 消息去重函数
+// 微任务队列系统
+class EventQueue {
+  constructor() {
+    this.queue = [];
+    this.processing = false;
+  }
+
+  // 添加事件到队列
+  add(eventData) {
+    this.queue.push(eventData);
+    console.log(`📋 事件已加入队列，队列长度: ${this.queue.length}`);
+    this.processQueue();
+  }
+
+  // 处理队列中的事件
+  async processQueue() {
+    if (this.processing) {
+      return;
+    }
+
+    this.processing = true;
+    console.log('🔄 开始处理事件队列...');
+
+    while (this.queue.length > 0) {
+      const eventData = this.queue.shift();
+      try {
+        await this.processEvent(eventData);
+      } catch (error) {
+        console.error('❌ 队列事件处理失败:', error);
+        // 错误不应该影响队列中其他事件的处理
+      }
+    }
+
+    this.processing = false;
+    console.log('✅ 事件队列处理完成');
+  }
+
+  // 异步处理单个事件
+  async processEvent(eventData) {
+    const { data, eventType, userMessage, thread_id } = eventData;
+    console.log(`🔄 异步处理事件: ${eventType}`);
+
+    try {
+      // 如果有thread_id，异步获取上下文
+      let contextInfo = '';
+      if (thread_id) {
+        try {
+          contextInfo = await getContextAsync(thread_id);
+        } catch (error) {
+          console.warn('⚠️ 队列中获取上下文失败:', error.message);
+          contextInfo = '';
+        }
+      }
+
+      // 调用 Claude API 获取智能回复
+      const fullMessage = contextInfo ? `${contextInfo}当前用户消息: ${userMessage}` : userMessage;
+      const claudeResponse = await getClaudeResponse(fullMessage);
+
+      // 创建格式化的富文本消息
+      let formattedResponse = `🤖 **Claude 智能回复**\n\n${claudeResponse}\n\n---\n💭 原始消息: ${userMessage}`;
+
+      if (claudeResponse.length > 200) {
+        formattedResponse = `🤖 **Claude 智能回复**\n\n${claudeResponse.substring(0, 200)}...\n\n${claudeResponse.substring(200, 400)}...\n\n*（回复较长，请分段阅读）*\n\n---\n💭 原始消息: ${userMessage}`;
+      }
+
+      // 发送回复（异步，失败不影响HTTP响应）
+      await this.sendResponseAsync(data, claudeResponse, formattedResponse, userMessage);
+
+    } catch (error) {
+      console.error('❌ 异步事件处理失败:', error);
+      // 发送错误响应
+      try {
+        await sendResponse(data, JSON.stringify({
+          text: '抱歉，AI 服务暂时不可用，请稍后重试。'
+        }), 'text');
+      } catch (responseError) {
+        console.error('错误响应发送失败:', responseError);
+      }
+    }
+  }
+
+  // 异步发送响应
+  async sendResponseAsync(data, claudeResponse, formattedResponse, userMessage) {
+    const shouldCreateCard = claudeResponse.length > 100 || userMessage.includes('创建') || userMessage.includes('话题');
+
+    try {
+      if (shouldCreateCard) {
+        const cardContent = {
+          config: { wide_screen_mode: true },
+          elements: [
+            {
+              tag: 'div',
+              text: {
+                content: `🤖 **Claude 智能回复**\n\n${claudeResponse}\n\n---\n💭 原始消息: ${userMessage}`,
+                tag: 'lark_md'
+              }
+            },
+            {
+              tag: 'action',
+              text: { content: '💬 继续对话', tag: 'plain_text' },
+              type: 'primary',
+              url: {
+                android: 'https://claude.ai',
+                ios: 'https://claude.ai',
+                pc: 'https://claude.ai'
+              }
+            }
+          ]
+        };
+
+        await sendResponse(data, JSON.stringify(cardContent), 'interactive');
+      } else {
+        const richTextContent = { text: formattedResponse };
+        await sendResponse(data, JSON.stringify(richTextContent));
+      }
+    } catch (error) {
+      console.error('发送回复失败:', error);
+      // 尝试发送简单文本回复作为备份
+      try {
+        await sendResponse(data, JSON.stringify({ text: claudeResponse }), 'text');
+        console.log('备份回复发送成功');
+      } catch (backupError) {
+        console.error('备份回复也失败:', backupError);
+      }
+    }
+  }
+}
+
+// 创建全局事件队列实例
+const eventQueue = new EventQueue();
+
+// 异步获取话题上下文的辅助函数
+async function getContextAsync(thread_id) {
+  console.log('=== 异步获取话题上下文 ===');
+  console.log('thread_id:', thread_id);
+
+  try {
+    const threadHistory = await client.im.v1.message.list({
+      params: {
+        container_id_type: 'thread',
+        container_id: thread_id,
+        page_size: 10,
+      },
+    });
+
+    if (threadHistory.data && threadHistory.data.items) {
+      const messages = threadHistory.data.items;
+      const messageTexts = messages.map(msg => `${msg.chat_id}:${msg.body.content}`);
+
+      if (messageTexts.length > 0) {
+        const contextInfo = `📚 话题上下文（最近${messageTexts.length}条消息）：\n${messageTexts.map((text, index) => `${index + 1}. ${text}`).join('\n')}\n\n`;
+        console.log('异步获取上下文成功:', contextInfo);
+        return contextInfo;
+      }
+    }
+
+    console.log('没有找到有效的上下文消息');
+    return '';
+  } catch (error) {
+    console.error('异步获取上下文失败:', error);
+    if (error.response && error.response.data && error.response.data.error) {
+      const errorCode = error.response.data.error.code;
+      if (errorCode === 99991672) {
+        console.error('⚠️ 权限不足错误！');
+        console.error('应用缺少获取历史消息的权限');
+      }
+    }
+    return '📝 获取话题上下文失败，可能是权限不足。\n\n';
+  }
+}
+
+// 改进的去重函数 - 支持多种标识符
+function isDuplicateEvent(data) {
+  // 获取事件唯一标识符
+  const eventId = getEventId(data);
+
+  if (!eventId) {
+    console.warn('⚠️ 无法获取事件ID，跳过去重检查');
+    return false;
+  }
+
+  if (eventCache.has(eventId)) {
+    console.log(`🔄 检测到重复事件: ${eventId}`);
+    return true;
+  }
+
+  eventCache.add(eventId);
+
+  // 清理5分钟前的缓存
+  setTimeout(() => {
+    eventCache.delete(eventId);
+  }, 5 * 60 * 1000);
+
+  return false;
+}
+
+// 获取事件唯一标识符
+function getEventId(data) {
+  // 尝试获取 v2.0 事件的 event_id
+  if (data.event_id) {
+    return `event_${data.event_id}`;
+  }
+
+  // 尝试获取 v1.0 事件的 uuid
+  if (data.uuid) {
+    return `uuid_${data.uuid}`;
+  }
+
+  // 兜底使用消息ID
+  if (data.message && data.message.message_id) {
+    return `msg_${data.message.message_id}`;
+  }
+
+  return null;
+}
+
+// 保留原有的消息去重函数（向后兼容）
 function isDuplicateMessage(messageId) {
   if (messageCache.has(messageId)) {
     console.log(`🔄 检测到重复消息: ${messageId}`);
@@ -79,7 +295,7 @@ async function sendAckToFeishu(data, content, type, msgType = 'text') {
  */
 function detectEventTriggerType(data) {
   try {
-    const { message, sender } = data;
+    const { message } = data;
     const { chat_type, message_type } = message;
 
     console.log('=== 事件类型分析 ===');
@@ -284,7 +500,7 @@ async function sendResponse(data, content, msgType = 'text') {
           data: {
             content: content,
             msg_type: msgType, // 设置消息类型。 Set message type.
-            reply_in_thread: 'true', // 以话题形式进行回复（创建话题） Reply in thread (create thread).
+            reply_in_thread: true, // 以话题形式进行回复（创建话题） Reply in thread (create thread).
           },
         });
         console.log('创建话题发送成功');
@@ -341,273 +557,94 @@ const eventDispatcher = new Lark.EventDispatcher({}).register({
    * https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message/events/receive
    */
   'im.message.receive_v1': async (data) => {
-    // 使用 try-catch 包装整个事件处理流程，确保不会因异常导致重试
-    try {
-      console.log('\n' + '='.repeat(50));
-      console.log('=== 开始处理消��事件 ===');
-      console.log('时间戳:', new Date().toISOString());
+    console.log('\n' + '='.repeat(50));
+    console.log('=== 收到飞书事件 ===');
+    console.log('时间戳:', new Date().toISOString());
 
-      // 消息去重检查
-      if (isDuplicateMessage(data.message.message_id)) {
-        console.log('🔄 跳过重复消息，避免重试');
-        return; // 对于重复消息直接返回，这样飞书知道消息已处理
+    try {
+      // 第一步：事件去重检查（使用改进的去重机制）
+      if (isDuplicateEvent(data)) {
+        console.log('🔄 跳过重复事件，飞书不会重试');
+        return; // 对于重复事件直接返回，HTTP 200会自动返回
       }
 
-      console.log('完整消息数据:', JSON.stringify(data, null, 2));
-
-      // 检测事件类型
+      // 第二步：快速检测是否需要处理此事件
       const eventType = detectEventTriggerType(data);
       console.log('=== 事件类型检测结果 ===');
       console.log('事件类型:', eventType);
 
-      // 只有私聊和群聊@才处理，其他事件忽略但响应
+      // 只有私聊和群聊@才处理，其他事件直接忽略
       const shouldProcess = ['private_message', 'group_mention'].includes(eventType);
 
-      if (shouldProcess) {
-        console.log('✅ 需要处理的事件，继续...');
-      } else {
-        console.log('🚫 普通群聊消息，直接忽略不响应');
-        return; // 直接返回，不发送任何响应
+      if (!shouldProcess) {
+        console.log('🚫 普通群聊消息，直接忽略');
+        return; // 直接返回，HTTP 200会自动返回
       }
 
+      // 第三步：快速解析消息（同步操作，确保快速完成）
       const {
-        message: { content, message_type, chat_type, thread_id, message_id },
+        message: { content, message_type, thread_id },
       } = data;
 
-      console.log('=== 消息基本信息 ===');
-      console.log('message_type:', message_type);
-      console.log('chat_type:', chat_type);
-      console.log('thread_id:', thread_id);
-      console.log('message_id:', message_id);
-      console.log('content:', content);
-
-      /**
-       * 解析用户发送的消息。
-       * Parse message sent by the user.
-       */
       let userMessage = '';
+      let parseError = null;
 
       try {
         if (message_type === 'text') {
           userMessage = JSON.parse(content).text;
-          console.log('=== 解析文本消息 ===');
-          console.log('解析后的文本:', userMessage);
+          console.log('✅ 快速解析文本消息成功:', userMessage);
         } else {
-          console.log('非文本消息类型:', message_type);
-          userMessage = '解析消息失败，请发送文本消息 \nparse message failed, please send text message';
-          // 对于非文本消息，直接返回错误信息
-          await sendResponse(data, userMessage);
-          return;
+          parseError = '解析消息失败，请发送文本消息 \nparse message failed, please send text message';
+          console.log('🚫 非文本消息类型:', message_type);
         }
       } catch (error) {
-        console.error('解析消息内容失败:', error);
-        console.error('错误详情:', error.message);
-        // 解析消息失败，返回错误信息。 Parse message failed, return error message.
-        userMessage = '解析消息失败，请发送文本消息 \nparse message failed, please send text message';
+        parseError = '解析消息失败，请发送文本消息 \nparse message failed, please send text message';
+        console.error('❌ 解析消息内容失败:', error);
+      }
 
-        // 确保即使解析失败也会响应飞书
+      // 如果解析失败，立即发送错误响应
+      if (parseError) {
         try {
-          await sendResponse(data, userMessage);
+          await sendResponse(data, JSON.stringify({ text: parseError }), 'text');
           console.log('✅ 解析错误响应发送成功');
         } catch (responseError) {
-          console.error('解析错误时发送响应也失败:', responseError);
-
-          // 最后的保底措施
-          try {
-            await sendResponse(data, JSON.stringify({
-              text: '事件处理完成（解析错误)'
-            }));
-            console.log('✅ 解析错误保底响应发送成功');
-          } catch (fallbackError) {
-            console.error('连保底响应都失败:', fallbackError);
-            console.log('⚠️ 飞书可能会重试，这是最后防线');
-          }
+          console.error('❌ 解析错误响应发送失败:', responseError);
         }
         return;
       }
 
-      console.log(`📨 收到用户消息: ${userMessage}`);
+      console.log(`📨 事件已记录，将异步处理: ${userMessage}`);
 
-      // 获取话题上下文（如果在话题中）
-      let contextInfo = '';
-      if (thread_id) {
-        console.log('=== 话题检测 ===');
-        console.log('消息在话题中，thread_id:', thread_id);
-        console.log('开始获取话题上下文...');
+      // 第四步：将事件加入异步处理队列
+      // 关键：此时事件处理已经完成，HTTP 200响应会立即返回
+      eventQueue.add({
+        data,
+        eventType,
+        userMessage,
+        thread_id
+      });
 
-        try {
-          console.log('调用API获取话题历史消息...');
-          console.log('API参数:', {
-            container_id_type: 'thread',
-            container_id: thread_id,
-            page_size: 10
-          });
-
-          const threadHistory = await client.im.v1.message.list({
-            params: {
-              container_id_type: 'thread', // 查询类型为话题
-              container_id: thread_id, // 话题ID
-              page_size: 10, // 获取最近10条消息
-            },
-          });
-
-          console.log('API调用成功，响应状态:', threadHistory.code);
-          console.log('API响应数据:', JSON.stringify(threadHistory, null, 2));
-
-          if (threadHistory.data && threadHistory.data.items) {
-            const messages = threadHistory.data.items;
-
-            const messageTexts = messages.map(msg => (msg.chat_id+":"+msg.body.content))
-
-            if (messageTexts.length > 0) {
-              contextInfo = `📚 话题上下文（最近${messageTexts.length}条消息）：\n${messageTexts.map((text, index) => `${index + 1}. ${text}`).join('\n')}\n\n`;
-              console.log('构建的上下文信息:', contextInfo);
-            } else {
-              console.log('没有找到有效的文本消息作为上下文');
-            }
-          } else {
-            console.log('API响应中没有消息数据');
-          }
-        } catch (error) {
-          console.error('获取话题上下文失败:', error);
-          console.error('错误详情:', error.message);
-          if (error.response && error.response.data && error.response.data.error) {
-            const errorCode = error.response.data.error.code;
-            if (errorCode === 99991672) {
-              console.error('⚠️  权限不足错误！');
-              console.error('应用缺少获取历史消息的权限，请：');
-              console.error('1. 点击链接申请权限: https://open.feishu.cn/app/cli_a8775c083cfb100c/auth?q=im:message.history:readonly,im:message:readonly,im:message&op_from=openapi&token_type=tenant');
-              console.error('2. 或者到飞书开发者后台手动添加权限: im:message.history:readonly');
-              console.error('3. 权限申请后，机器人将能够获取话题上下文');
-            }
-          }
-          if (error.response) {
-            console.error('API错误响应:', JSON.stringify(error.response, null, 2));
-          }
-
-          // 设置友好的错误提示给用户
-          contextInfo = '📝 获取话题上下文失败，可能是权限不足。管理员请联系开发者添加 "im:message.history:readonly" 权限。\n\n';
-        }
-      } else {
-        console.log('=== 话题检测 ===');
-        console.log('消息不在话题中，将创建新话题');
-      }
-
-      // 构建完整消息给 Claude（包含上下文）
-      const fullMessage = contextInfo ? `${contextInfo}当前用户消息: ${userMessage}` : userMessage;
-      console.log('=== 发送给 Claude 的完整消息 ===');
-      console.log('完整消息内容:', fullMessage);
-
-      // 调用 Claude API 获取智能回复
-      const claudeResponse = await getClaudeResponse(fullMessage);
-
-      // 创建格式化的富文本消息，提高可读性并避免刷屏
-      let formattedResponse = `🤖 **Claude 智能回复**\n\n${claudeResponse}\n\n---\n💭 原始消息: ${userMessage}`;
-
-      // 如果消息太长，进行分段处理
-      if (claudeResponse.length > 200) {
-        // 添加换行和时间戳，提高可读性
-        formattedResponse = `🤖 **Claude 智能回复**\n\n${claudeResponse.substring(0, 200)}...\n\n${claudeResponse.substring(200, 400)}...\n\n*（回复较长，请分段阅读）*\n\n---\n💭 原始消息: ${userMessage}`;
-      }
-
-      // 检查是否需要创建交互式卡片
-      const shouldCreateCard = claudeResponse.length > 100 || userMessage.includes('创建') || userMessage.includes('话题');
-
-      try {
-        if (shouldCreateCard) {
-          // 创建交互式卡片消息
-          const cardContent = {
-            config: {
-              wide_screen_mode: true,
-            },
-            elements: [
-              {
-                tag: 'div',
-                text: {
-                  content: `🤖 **Claude 智能回复**\n\n${claudeResponse}\n\n---\n💭 原始消息: ${userMessage}`,
-                  tag: 'lark_md'
-                }
-              },
-              {
-                tag: 'action',
-                text: {
-                  content: '💬 继续对话',
-                  tag: 'plain_text'
-                },
-                type: 'primary',
-                url: {
-                  android: `https://claude.ai`,
-                  ios: `https://claude.ai`,
-                  pc: `https://claude.ai`
-                }
-              },
-              {
-                tag: 'action',
-                text: {
-                  content: '📝 创建新话题',
-                  tag: 'plain_text'
-                },
-                type: 'default',
-                url: {
-                  android: `https://claude.ai/chat`,
-                  ios: `https://claude.ai/chat`,
-                  pc: `https://claude.ai/chat`
-                }
-              }
-            ]
-          };
-
-          console.log(`📄 发送 Claude 交互式卡片: ${claudeResponse.substring(0, 50)}...`);
-
-          // 发送交互式卡片回复
-          await sendResponse(data, JSON.stringify(cardContent), 'interactive');
-        } else {
-          // 创建富文本内容，支持 Markdown 格式
-          const richTextContent = {
-            text: formattedResponse,
-            // 添加一些格式化选项
-            // at_users: {
-            //   user_id_list: [data.sender.sender_id] // 可以 @ 提及用户
-            // }
-          };
-
-          console.log(`📤 发送格式化 Claude 回复: ${claudeResponse.substring(0, 50)}...`);
-
-          // 发送富文本回复
-          await sendResponse(data, JSON.stringify(richTextContent));
-        }
-      } catch (replyError) {
-        console.error('发送回复失败:', replyError);
-        console.error('回复错误详情:', replyError.message);
-
-        // 尝试发送简单文本回复作为备份
-        try {
-          console.log('尝试发送简单文本回复作为备份...');
-          await sendResponse(data, JSON.stringify({ text: claudeResponse }), 'text');
-          console.log('备份回复发送成功');
-        } catch (backupError) {
-          console.error('备份回复也失败:', backupError);
-        }
-      }
-
-      console.log('=== 消息处理完成 ===');
-      console.log('='.repeat(50) + '\n');
+      console.log('✅ 事件已加入异步队列，HTTP 200响应即将返回');
+      console.log('🔄 飞书不会重试，业务逻辑将异步处理');
 
     } catch (error) {
-      console.error('❌ 事件处理过程中发生严重错误:', error);
+      console.error('❌ 事件处理流程发生错误:', error);
       console.error('错误堆栈:', error.stack);
 
-      // 即使发生错误，也要确保给飞书一个响应，避免重试
+      // 即使发生错误，也要尝试发送一个简单响应避免重试
       try {
-        console.log('尝试发送错误响应，避免飞书重试...');
         await sendResponse(data, JSON.stringify({
-          text: '抱歉，处理消息时发生错误，请稍后重试。'
+          text: '事件已收到，处理中...'
         }), 'text');
-        console.log('错误响应发送成功');
+        console.log('✅ 错误情况下的保底响应发送成功');
       } catch (fallbackError) {
-        console.error('连错误响应都无法发送:', fallbackError);
+        console.error('❌ 连保底响应都失败:', fallbackError);
+        console.log('⚠️ 飞书可能会重试');
       }
     }
+
+    console.log('=== 事件处理函数结束 ===');
+    console.log('='.repeat(50) + '\n');
   },
 });
 
