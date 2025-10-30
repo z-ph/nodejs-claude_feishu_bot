@@ -4,6 +4,7 @@
  */
 
 import { client } from '../config/larkConfig.js';
+import { ENABLE_DEEP_THINKING } from '../services/claudeService.js';
 
 /**
  * 发送回复消息的通用函数
@@ -100,7 +101,11 @@ async function replyToFeishu(data) {
   try {
     console.log('📤 立即回复飞书，告知用户正在处理');
 
-    const thinkingMessage = JSON.stringify({ text: '正在思考中，请稍候...' });
+    const thinkingText = ENABLE_DEEP_THINKING
+    ? '🧠 AI 正在深度思考中...\n\n⏳ 请稍候，正在分析问题并生成高质量回复...'
+    : '🤖 AI 正在处理中...\n\n⏳ 请稍候...';
+
+  const thinkingMessage = JSON.stringify({ text: thinkingText });
     const result = await sendResponse(data, thinkingMessage, 'text');
 
     console.log('✅ 立即回复发送成功');
