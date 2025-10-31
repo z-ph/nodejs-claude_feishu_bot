@@ -135,7 +135,7 @@ async function editMessage(messageId, newContent, tenantToken = null) {
       },
       data: {
         msg_type: 'text',
-        content: JSON.stringify({ text: newContent }),
+        content: newContent,
       },
     };
 

@@ -611,12 +611,12 @@ class EventQueue {
       try {
         if (segmentNumber === 1 && thinkingMessageId) {
           // 第一段编辑原消息
-          await this.editMessageAsRichText(thinkingMessageId, segmentContent);
-          console.log(`✅ 第1段富文本编辑成功`);
+          await this.editMessageSafely(thinkingMessageId, segmentContent);
+          console.log(`✅ 第1段编辑成功`);
         } else {
           // 后续段发送新消息
-          await sendResponse(data, JSON.stringify(richTextSegment), 'interactive');
-          console.log(`✅ 第${segmentNumber}段富文本发送成功`);
+          await sendResponse(data, JSON.stringify({ text: segmentContent }), 'text');
+          console.log(`✅ 第${segmentNumber}段发送成功`);
         }
 
         // 段落间延迟
