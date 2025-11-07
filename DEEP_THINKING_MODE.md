@@ -69,7 +69,7 @@ const client = new Anthropic({
 ```javascript
 // 使用流式响应获取思考过程
 const stream = await client.messages.create({
-  model: 'GLM-4.6',
+  model: 'claude-sonnet-4-5-20250929',
   max_tokens: DEEP_THINKING_MAX_TOKENS,
   messages: [
     {

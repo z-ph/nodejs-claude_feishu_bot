@@ -32,7 +32,7 @@ const claudeClient = new Anthropic({
 async function getClaudeResponse(message) {
   try {
     const response = await claudeClient.messages.create({
-      model: 'GLM-4.6',
+      model: 'claude-sonnet-4-5-20250929',
       max_tokens: 1000,
       messages: [
         { role: 'user', content: message }
@@ -68,7 +68,7 @@ ${THINKING_CONFIG.USER_MESSAGE_TEMPLATE.replace('{message}', message)}`;
 
     // 使用流式响应
     const stream = await claudeClient.messages.create({
-      model: 'GLM-4.6',
+      model: 'claude-sonnet-4-5-20250929',
       max_tokens: DEEP_THINKING_MAX_TOKENS,
       messages: [
         { role: 'user', content: systemPrompt }
@@ -239,7 +239,7 @@ ${truncatedResponse}
     const remainingTokens = Math.max(1000, DEEP_THINKING_MAX_TOKENS - usedTokens);
 
     const response = await claudeClient.messages.create({
-      model: 'GLM-4.6',
+      model: 'claude-sonnet-4-5-20250929',
       max_tokens: remainingTokens,
       messages: [
         {
