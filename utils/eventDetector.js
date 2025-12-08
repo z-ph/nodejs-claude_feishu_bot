@@ -36,59 +36,18 @@ function detectEventTriggerType(data) {
         if (message.mentions && Array.isArray(message.mentions)) {
           console.log('📋 检查mentions数组:', JSON.stringify(message.mentions, null, 2));
 
-          // 从环境变量获取机器人标识
+          // 从环境变量获取机器人open_id
           const botOpenId = process.env.BOT_OPEN_ID;
-          const botUserId = process.env.BOT_USER_ID;
-          const appName = process.env.APP_NAME;
 
-          console.log('🤖 机器人标识信息:', {
-            BOT_OPEN_ID: botOpenId,
-            BOT_USER_ID: botUserId,
-            APP_NAME: appName,
-            APP_ID: process.env.APP_ID
-          });
+          console.log('🤖 机器人Open ID:', process.env.BOT_OPEN_ID);
 
-          // 方式1: 通过open_id检测
+          // 只通过open_id检测，防止误验证到其他机器人
           if (botOpenId) {
             hasMention = message.mentions.some(mention =>
               mention.id && mention.id.open_id === botOpenId
             );
             console.log('🔍 通过open_id检测@机器人:', hasMention);
           }
-
-          // 方式2: 通过user_id检测
-          if (!hasMention && botUserId) {
-            hasMention = message.mentions.some(mention =>
-              mention.id && mention.id.user_id === botUserId
-            );
-            console.log('🔍 通过user_id检测@机器人:', hasMention);
-          }
-
-          // 方式3: 通过name检测（作为备用）
-          if (!hasMention && appName) {
-            hasMention = message.mentions.some(mention =>
-              mention.name === appName
-            );
-            console.log('🔍 通过name检测@机器人:', hasMention);
-          }
-
-          // 方式4: 通过关键词检测（最后备用）
-          if (!hasMention) {
-            hasMention = message.mentions.some(mention =>
-              mention.name && (
-                mention.name.includes('机器人') ||
-                mention.name.includes('Bot') ||
-                mention.name.includes('Assistant')
-              )
-            );
-            console.log('🔍 通过关键词检测@机器人:', hasMention);
-          }
-        }
-
-        // 额外检查文本中的@
-        if (!hasMention && message.text) {
-          const botMentionPattern = `@_user_${process.env.APP_ID}`;
-          hasMention = message.text.includes(botMentionPattern);
         }
 
         if (hasMention) {
